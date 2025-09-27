@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <title>WebXR AR Audio Waveform Visualizer</title>
+    <title>WebXR AR Directional Audio Visualizer</title>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <style>
@@ -63,7 +63,7 @@
 </head>
 <body>
     <div id="info">
-        Click "Enable Audio" to allow microphone access, then start AR session.
+        Enable audio to see directional sound visualization in AR. Waveforms will appear where sounds are coming from.
     </div>
 
     <button id="audio-button" class="button">Enable Audio</button>
@@ -82,10 +82,16 @@
         import { ARButton } from 'three/addons/webxr/ARButton.js';
 
         let camera, scene, renderer;
-        let line, analyser, dataArray;
+        let audioSources = []; // Array to store multiple audio source visualizations
+        let audioContext, leftAnalyser, rightAnalyser, leftData, rightData;
         
-        const FFT_SIZE = 2048; // Must be a power of 2
+        const FFT_SIZE = 1024; // Smaller for better performance with multiple sources
         let audioInitialized = false;
+        
+        // Audio source detection parameters
+        const MAX_SOURCES = 4; // Maximum number of simultaneous audio sources to track
+        const DETECTION_THRESHOLD = 50; // Minimum audio level to consider as a source
+        const POSITION_SMOOTHING = 0.1; // Smoothing factor for source position updates
 
         init();
         animate();
@@ -140,39 +146,134 @@
             window.addEventListener('resize', onWindowResize);
         }
         
-        async function setupAudio() {
-            try {
-                // Get audio stream from microphone
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        class AudioSource {
+            constructor(id, position) {
+                this.id = id;
+                this.position = position.clone();
+                this.targetPosition = position.clone();
+                this.intensity = 0;
+                this.isActive = false;
+                this.lastUpdateTime = 0;
                 
-                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                const source = audioContext.createMediaStreamSource(stream);
-                
-                // Create an analyser node
-                analyser = audioContext.createAnalyser();
-                analyser.fftSize = FFT_SIZE;
-                
-                // Connect the source to the analyser. 
-                // We don't connect the analyser to the destination, so you won't hear the microphone input.
-                source.connect(analyser);
-
-                const bufferLength = analyser.frequencyBinCount;
-                dataArray = new Uint8Array(bufferLength);
-                
-                // Create the line geometry for the waveform
+                // Create waveform visualization
                 const geometry = new THREE.BufferGeometry();
-                const material = new THREE.LineBasicMaterial({ color: 0x00ff7f, linewidth: 3 });
+                const material = new THREE.LineBasicMaterial({ 
+                    color: new THREE.Color().setHSL(id * 0.25, 0.8, 0.6),
+                    linewidth: 2,
+                    transparent: true,
+                    opacity: 0.8
+                });
                 
-                const positions = new Float32Array(bufferLength * 3);
+                const positions = new Float32Array(FFT_SIZE / 4 * 3); // Use quarter of FFT for performance
                 geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
                 
-                line = new THREE.Line(geometry, material);
-                // Position the waveform 1 meter in front of the user
-                line.position.set(0, -0.2, -1);
-                scene.add(line);
+                this.line = new THREE.Line(geometry, material);
+                this.line.position.copy(this.position);
+                scene.add(this.line);
+                
+                // Add a subtle glow effect
+                const glowGeometry = new THREE.SphereGeometry(0.05, 8, 8);
+                const glowMaterial = new THREE.MeshBasicMaterial({
+                    color: material.color,
+                    transparent: true,
+                    opacity: 0.3
+                });
+                this.glow = new THREE.Mesh(glowGeometry, glowMaterial);
+                this.glow.position.copy(this.position);
+                scene.add(this.glow);
+            }
+            
+            update(newPosition, intensity, waveformData) {
+                this.intensity = intensity;
+                this.targetPosition.copy(newPosition);
+                this.lastUpdateTime = Date.now();
+                this.isActive = intensity > DETECTION_THRESHOLD;
+                
+                // Smooth position updates
+                this.position.lerp(this.targetPosition, POSITION_SMOOTHING);
+                this.line.position.copy(this.position);
+                this.glow.position.copy(this.position);
+                
+                // Update waveform visualization
+                if (waveformData) {
+                    this.updateWaveform(waveformData);
+                }
+                
+                // Update visibility based on intensity
+                const alpha = Math.min(intensity / 128, 1.0) * 0.8;
+                this.line.material.opacity = alpha;
+                this.glow.material.opacity = alpha * 0.5;
+                this.glow.scale.setScalar(1 + intensity / 256);
+            }
+            
+            updateWaveform(data) {
+                const positions = this.line.geometry.attributes.position.array;
+                const samples = positions.length / 3;
+                
+                for (let i = 0; i < samples; i++) {
+                    const dataIndex = Math.floor(i * data.length / samples);
+                    const v = (data[dataIndex] / 128.0) - 1.0;
+                    
+                    // Create a circular waveform around the source point
+                    const angle = (i / samples) * Math.PI * 2;
+                    const radius = 0.2 + Math.abs(v) * 0.3;
+                    
+                    positions[i * 3] = Math.cos(angle) * radius;
+                    positions[i * 3 + 1] = Math.sin(angle) * radius;
+                    positions[i * 3 + 2] = v * 0.1; // Depth variation
+                }
+                
+                this.line.geometry.attributes.position.needsUpdate = true;
+            }
+            
+            dispose() {
+                scene.remove(this.line);
+                scene.remove(this.glow);
+                this.line.geometry.dispose();
+                this.line.material.dispose();
+                this.glow.geometry.dispose();
+                this.glow.material.dispose();
+            }
+        }
+
+        async function setupAudio() {
+            try {
+                // Request stereo audio for directional analysis
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: {
+                        channelCount: 2,
+                        sampleRate: 44100,
+                        echoCancellation: false,
+                        noiseSuppression: false,
+                        autoGainControl: false
+                    }
+                });
+                
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const source = audioContext.createMediaStreamSource(stream);
+                
+                // Create stereo splitter for directional analysis
+                const splitter = audioContext.createChannelSplitter(2);
+                source.connect(splitter);
+                
+                // Create analysers for left and right channels
+                leftAnalyser = audioContext.createAnalyser();
+                rightAnalyser = audioContext.createAnalyser();
+                leftAnalyser.fftSize = FFT_SIZE;
+                rightAnalyser.fftSize = FFT_SIZE;
+                
+                splitter.connect(leftAnalyser, 0);
+                splitter.connect(rightAnalyser, 1);
+                
+                const bufferLength = leftAnalyser.frequencyBinCount;
+                leftData = new Uint8Array(bufferLength);
+                rightData = new Uint8Array(bufferLength);
+                
+                // Initialize audio sources
+                initializeAudioSources();
                 
                 audioInitialized = true;
-                document.getElementById('info').textContent = 'Audio enabled! Click "Start AR" to begin the AR session.';
+                document.getElementById('info').textContent = 'Directional audio enabled! Start AR to see sound sources visualized in 3D space.';
 
             } catch (err) {
                 console.error('Error accessing microphone:', err);
@@ -182,6 +283,65 @@
                 audioButton.disabled = false;
                 audioButton.textContent = 'Enable Audio';
             }
+        }
+        
+        function initializeAudioSources() {
+            // Initialize potential audio source positions around the user
+            const positions = [
+                new THREE.Vector3(-1, 0, -1),   // Front left
+                new THREE.Vector3(1, 0, -1),    // Front right
+                new THREE.Vector3(-1, 0, 1),    // Back left
+                new THREE.Vector3(1, 0, 1),     // Back right
+            ];
+            
+            for (let i = 0; i < MAX_SOURCES; i++) {
+                audioSources.push(new AudioSource(i, positions[i] || new THREE.Vector3()));
+            }
+        }
+        
+        function analyzeAudioDirection() {
+            if (!leftAnalyser || !rightAnalyser) return;
+            
+            leftAnalyser.getByteFrequencyData(leftData);
+            rightAnalyser.getByteFrequencyData(rightData);
+            
+            // Calculate stereo balance and intensity
+            let leftTotal = 0, rightTotal = 0;
+            for (let i = 0; i < leftData.length; i++) {
+                leftTotal += leftData[i];
+                rightTotal += rightData[i];
+            }
+            
+            const totalIntensity = (leftTotal + rightTotal) / 2;
+            const balance = (rightTotal - leftTotal) / Math.max(rightTotal + leftTotal, 1);
+            
+            // Simple directional mapping based on stereo balance
+            if (totalIntensity > DETECTION_THRESHOLD) {
+                // Primary source based on stereo balance
+                const angle = balance * Math.PI * 0.5; // -45° to +45°
+                const distance = 1.5;
+                const sourcePos = new THREE.Vector3(
+                    Math.sin(angle) * distance,
+                    0,
+                    -Math.cos(angle) * distance
+                );
+                
+                // Update the most appropriate audio source
+                const sourceIndex = Math.floor((angle + Math.PI/2) / Math.PI * (MAX_SOURCES - 1));
+                if (audioSources[sourceIndex]) {
+                    leftAnalyser.getByteTimeDomainData(leftData); // Get waveform data
+                    audioSources[sourceIndex].update(sourcePos, totalIntensity / leftData.length, leftData);
+                }
+            }
+            
+            // Decay inactive sources
+            const currentTime = Date.now();
+            audioSources.forEach(source => {
+                if (currentTime - source.lastUpdateTime > 100) { // 100ms timeout
+                    source.intensity *= 0.95;
+                    source.update(source.position, source.intensity, null);
+                }
+            });
         }
 
         function onWindowResize() {
@@ -195,33 +355,9 @@
         }
 
         function render() {
-            // Update waveform if audio is initialized
-            if (audioInitialized && analyser && line) {
-                // Get the time-domain data from the analyser
-                analyser.getByteTimeDomainData(dataArray);
-                
-                const positions = line.geometry.attributes.position.array;
-                const bufferLength = analyser.frequencyBinCount;
-
-                // Update the vertices of the line based on the waveform data
-                for (let i = 0; i < bufferLength; i++) {
-                    // Normalize the data to be between -1 and 1
-                    const v = (dataArray[i] / 128.0) - 1.0; 
-                    
-                    // Spread the points along the x-axis
-                    const x = (i / (bufferLength - 1) - 0.5) * 1.5; // Width of 1.5 units
-                    
-                    // Set the y position based on the audio data, scaled down
-                    const y = v * 0.25; 
-                    
-                    positions[i * 3] = x;
-                    positions[i * 3 + 1] = y;
-                    // z is 0 as it's a 2D waveform in 3D space
-                    positions[i * 3 + 2] = 0;
-                }
-
-                // Tell three.js that the position attribute needs to be updated
-                line.geometry.attributes.position.needsUpdate = true;
+            // Analyze audio direction and update visualizations
+            if (audioInitialized) {
+                analyzeAudioDirection();
             }
             
             renderer.render(scene, camera);
