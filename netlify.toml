@@ -1,0 +1,22 @@
+[build]
+  publish = "."
+  command = "echo 'No build step needed for static site'"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-XSS-Protection = "1; mode=block"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+
+# HTTPS redirects
+[[redirects]]
+  from = "/*"
+  to = "/*"
+  status = 301
+  scheme = "https"
+
+# WebXR requires HTTPS
+[context.production.environment]
+  NODE_ENV = "production"
