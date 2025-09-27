@@ -145,7 +145,7 @@
                 // Get audio stream from microphone
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
                 
-                const audioContext = new THREE.AudioContext();
+                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
                 const source = audioContext.createMediaStreamSource(stream);
                 
                 // Create an analyser node
