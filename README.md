@@ -30,4 +30,8 @@ direnv allow
 
 ## Deployment
 
-The application is deployed to Netlify and can be accessed at: [URL will be added after deployment]
+The application is deployed to Netlify and can be accessed at: https://webxr-audio-visualizer.netlify.app
+
+## GitHub Repository
+
+Source code: https://github.com/shift/webxr-audio-visualizer
