@@ -13,9 +13,8 @@
             color: #fff;
             overflow: hidden; /* Hide scrollbars */
         }
-        #ar-button {
+        .button {
             position: absolute;
-            bottom: 20px;
             left: 50%;
             transform: translateX(-50%);
             padding: 12px 24px;
@@ -30,8 +29,18 @@
             z-index: 100;
             transition: background-color 0.3s ease, transform 0.3s ease;
         }
-        #ar-button:hover {
+        .button:hover {
             background: rgba(255, 255, 255, 0.2);
+        }
+        .button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        #audio-button {
+            bottom: 80px;
+        }
+        #ar-button {
+            bottom: 20px;
         }
          #info {
             position: absolute;
@@ -54,8 +63,10 @@
 </head>
 <body>
     <div id="info">
-        Allow microphone access and start AR session to see the audio waveform.
+        Click "Enable Audio" to allow microphone access, then start AR session.
     </div>
+
+    <button id="audio-button" class="button">Enable Audio</button>
 
     <script type="importmap">
         {
@@ -101,14 +112,28 @@
             light.position.set(0.5, 1, 0.25);
             scene.add(light);
 
+            // Audio Button
+            const audioButton = document.getElementById('audio-button');
+            audioButton.addEventListener('click', async () => {
+                audioButton.disabled = true;
+                audioButton.textContent = 'Requesting permission...';
+                document.getElementById('info').textContent = 'Please allow microphone access in the popup.';
+                
+                await setupAudio();
+                if (audioInitialized) {
+                    audioButton.style.display = 'none';
+                    arButton.style.display = 'block';
+                } else {
+                    audioButton.disabled = false;
+                    audioButton.textContent = 'Enable Audio';
+                }
+            });
+
             // AR Button
             const arButton = ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] });
             arButton.id = 'ar-button';
-            arButton.addEventListener('click', () => {
-                if (!audioInitialized) {
-                    setupAudio();
-                }
-            });
+            arButton.className = 'button';
+            arButton.style.display = 'none'; // Hidden until audio is enabled
             document.body.appendChild(arButton);
             
             // Handle window resizing
@@ -147,11 +172,15 @@
                 scene.add(line);
                 
                 audioInitialized = true;
-                document.getElementById('info').style.display = 'none';
+                document.getElementById('info').textContent = 'Audio enabled! Click "Start AR" to begin the AR session.';
 
             } catch (err) {
                 console.error('Error accessing microphone:', err);
-                document.getElementById('info').textContent = 'Error: Could not access microphone.';
+                document.getElementById('info').textContent = 'Error: Could not access microphone. Please allow microphone access and try again.';
+                // Reset button state
+                const audioButton = document.getElementById('audio-button');
+                audioButton.disabled = false;
+                audioButton.textContent = 'Enable Audio';
             }
         }
 
